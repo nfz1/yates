@@ -61,98 +61,6 @@ let capacity_of_edge topo edge =
   else if !Globals.er_mode then cap
   else 100. *. cap
 
-let source_routing_configuration_of_scheme (topo:topology) (scm:scheme)
-    (tag_hash: (edge,int) Hashtbl.t) : configuration =
-  SrcDstMap.fold scm
-    ~init:SrcDstMap.empty
-    ~f:(fun ~key:(src,dst) ~data:paths acc ->
-        if src = dst then acc
-        else
-          let tags = PathMap.fold paths ~init:TagsMap.empty
-              ~f:(fun ~key:path ~data:prob acc ->
-                  match path with
-                  | [] -> assert false
-                  | _::path' ->
-                    let tags = List.filter ~f:(fun x -> x <> 99)
-                        (List.map path' ~f:(fun edge ->
-                             match Hashtbl.find tag_hash edge with
-                             | None ->
-                               Printf.printf "Couldn't find %s\n" (dump_edges topo [edge]);
-                               99
-                             | Some t -> t)) in
-                    TagsMap.set acc ~key:tags ~data:prob) in
-          SrcDstMap.set acc ~key:(src,dst) ~data:tags)
-
-let path_routing_configuration_of_scheme (topo:topology) (scm:scheme)
-    (path_tag_map: int PathMap.t) : configuration =
-  SrcDstMap.fold scm
-    ~init:SrcDstMap.empty
-    ~f:(fun ~key:(src,dst) ~data:path_prob_map acc ->
-        if src = dst then acc
-        else
-          let tag_prob_map = PathMap.fold path_prob_map ~init:TagsMap.empty
-              ~f:(fun ~key:path ~data:prob acc ->
-                  let tag = PathMap.find_exn path_tag_map path in
-                  TagsMap.set acc ~key:([tag]) ~data:prob) in
-          SrcDstMap.set acc ~key:(src,dst) ~data:tag_prob_map)
-
-
-let bprint_tags (buf:Buffer.t) (tag_dist:probability TagsMap.t) : unit =
-  TagsMap.iteri
-    tag_dist
-    ~f:(fun ~key:tags ~data:prob ->
-        Printf.bprintf buf "%d " (Float.to_int (1000.0 *. prob));
-        Printf.bprintf buf "%d " (List.length tags);
-        List.iter tags (Printf.bprintf buf "%d "))
-
-let bprint_configuration (topo:topology) (bufs:(Topology.vertex,Buffer.t) Hashtbl.t)
-    (conf:configuration) : unit =
-  let dstCount =
-    SrcDstMap.fold
-      conf
-      ~init:VertexMap.empty
-      ~f:(fun ~key:(src, dst) ~data:tag_dist acc ->
-          let count =
-            match VertexMap.find acc src with
-            | None -> 0
-            | Some x -> x
-          in
-          VertexMap.set acc ~key:src ~data:(count+1);
-        ) in
-  SrcDstMap.iteri
-    conf
-    ~f:(fun ~key:(src,dst) ~data:tag_dist ->
-        let buf =
-          match Hashtbl.find bufs src with
-          | Some buf -> buf
-          | None ->
-            let buf = Buffer.create 101 in
-            Hashtbl.add_exn bufs src buf;
-            let count =
-              match VertexMap.find dstCount src with
-              | None -> 0
-              | Some x -> x
-            in
-            Printf.bprintf buf "%d " count;
-            buf in
-        Printf.bprintf buf "%lu " (Node.ip (Topology.vertex_to_label topo dst));
-        Printf.bprintf buf "%d " (TagsMap.length tag_dist);
-        bprint_tags buf tag_dist)
-
-let print_configuration (topo:topology) (conf:configuration) (time:int) : unit =
-  let bufs = Hashtbl.Poly.create () in
-  bprint_configuration topo bufs conf;
-  Hashtbl.Poly.iteri
-    bufs
-    ~f:(fun ~key:src ~data:buf ->
-        let route_filename = Printf.sprintf "routes/%s_%d"
-            (Frenetic_kernel.Packet.string_of_ip
-               (Node.ip (Topology.vertex_to_label topo src))) time in
-      let route_file = Out_channel.create route_filename in
-      Out_channel.output_string route_file (Buffer.contents buf);
-      Out_channel.close route_file;
-    )
-
 let normalize_scheme_fs (s : scheme) (fs: float SrcDstMap.t) : scheme =
   (* s = a routing scheme, fs = the sum of flow values in each flow_decomp *)
   SrcDstMap.fold ~init:(SrcDstMap.empty)
@@ -656,3 +564,36 @@ let congestion_of_paths (t:topology) (d:demands) (s:scheme) : (float EdgeMap.t) 
         ~data:(amount_sent /. (capacity_of_edge t e))
         acc) sent_on_each_edge
 
+(*******************************************************************)
+(* External LP solvers - Gurobi *)
+(*******************************************************************)
+(* start gurobi with an LP *)
+let gurobi_process (lp_filename:string) (lp_solname:string) =
+  let method_str = (Int.to_string !Globals.gurobi_method) in
+  Unix.open_process_in ("gurobi_cl Method=" ^ method_str ^
+                        " OptimalityTol=1e-9 ResultFile=" ^ lp_solname ^
+                        " " ^ lp_filename)
+
+(* call gurobi and wait for completion *)
+let call_gurobi (lp_filename:string) (lp_solname:string) =
+  let gurobi_in = gurobi_process lp_filename lp_solname in
+  let time_str = "Solved in [0-9]+ iterations and \\([0-9.e+-]+\\) seconds" in
+  let time_regex = Str.regexp time_str in
+  let rec read_output gurobi solve_time =
+    try
+      let line = In_channel.input_line_exn gurobi in
+      if Str.string_match time_regex line 0 then
+        let num_seconds = Float.of_string (Str.matched_group 1 line) in
+        read_output gurobi num_seconds
+      else
+        read_output gurobi solve_time
+    with
+      End_of_file -> solve_time in
+  let _ = read_output gurobi_in 0. in
+  let status = Unix.close_process_in gurobi_in in
+  match status with
+  | Error exit_or_signal ->
+    begin
+      failwith("Failed to run Gurobi. Please check that Gurobi is installed (gurobi_cl is in $PATH) and that you have a valid license.");
+    end
+  | _ -> ();

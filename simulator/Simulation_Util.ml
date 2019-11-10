@@ -3,104 +3,11 @@ open Core
 open Simulation_Types
 open Yates_types.Types
 open Yates_routing.Util
+open Yates_solvers.Solvers
 
 (**************************************************************)
 (* Helper functions for simulator *)
 (**************************************************************)
-let solver_to_string (s:solver_type) : string =
-  match s with
-  | Ac -> "ac"
-  | AkEcmp -> "akecmp"
-  | AkKsp -> "akksp"
-  | AkMcf -> "akmcf"
-  | AkRaeke -> "akraeke"
-  | AkVlb -> "akvlb"
-  | Cspf -> "cspf"
-  | Ecmp -> "ecmp"
-  | Edksp -> "edksp"
-  | Ffc -> "ffc"
-  | Ffced -> "ffced"
-  | Ksp -> "ksp"
-  | Mcf -> "mcf"
-  | MwMcf -> "mwmcf"
-  | Raeke -> "raeke"
-  | SemiMcfAc -> "semimcfac"
-  | SemiMcfEcmp -> "semimcfecmp"
-  | SemiMcfEdksp -> "semimcfedksp"
-  | SemiMcfKsp -> "semimcfksp"
-  | SemiMcfKspFT -> "semimcfkspft"
-  | SemiMcfMcf -> "semimcfmcf"
-  | SemiMcfMcfEnv -> "semimcfmcfenv"
-  | SemiMcfMcfFTEnv -> "semimcfmcfftenv"
-  | SemiMcfRaeke -> "semimcfraeke"
-  | SemiMcfRaekeFT -> "semimcfraekeft"
-  | SemiMcfVlb -> "semimcfvlb"
-  | Spf -> "spf"
-  | Vlb -> "vlb"
-  | OptimalMcf -> "optimalmcf"
-
-let select_algorithm solver = match solver with
-  | Ac -> Yates_routing.AC.solve
-  | AkEcmp
-  | AkKsp
-  | AkMcf
-  | AkRaeke
-  | AkVlb -> Yates_routing.Ak.solve
-  | Cspf -> Yates_routing.Cspf.solve
-  | Ecmp -> Yates_routing.Ecmp.solve
-  | Edksp -> Yates_routing.Edksp.solve
-  | Ffc
-  | Ffced -> Yates_routing.Ffc.solve
-  | Ksp -> Yates_routing.Ksp.solve
-  | Mcf -> Yates_routing.Mcf.solve
-  | MwMcf -> Yates_routing.MwMcf.solve
-  | OptimalMcf -> Yates_routing.Mcf.solve
-  | Raeke -> Yates_routing.Raeke.solve
-  | SemiMcfAc
-  | SemiMcfEcmp
-  | SemiMcfEdksp
-  | SemiMcfKsp
-  | SemiMcfKspFT
-  | SemiMcfMcf
-  | SemiMcfMcfEnv
-  | SemiMcfMcfFTEnv
-  | SemiMcfRaeke
-  | SemiMcfRaekeFT
-  | SemiMcfVlb -> Yates_routing.SemiMcf.solve
-  | Spf -> Yates_routing.Spf.solve
-  | Vlb -> Yates_routing.Vlb.solve
-
-let select_local_recovery solver = match solver with
-  | Ac -> Yates_routing.AC.local_recovery
-  | AkEcmp
-  | AkKsp
-  | AkMcf
-  | AkRaeke
-  | AkVlb -> Yates_routing.Ak.local_recovery
-  | Cspf -> Yates_routing.Cspf.local_recovery
-  | Ecmp -> Yates_routing.Ecmp.local_recovery
-  | Edksp -> Yates_routing.Edksp.local_recovery
-  | Ffc
-  | Ffced -> Yates_routing.Ffc.local_recovery
-  | Ksp -> Yates_routing.Ksp.local_recovery
-  | Mcf -> Yates_routing.Mcf.local_recovery
-  | MwMcf -> Yates_routing.MwMcf.local_recovery
-  | OptimalMcf -> failwith "No local recovery for optimal mcf"
-  | Raeke -> Yates_routing.Raeke.local_recovery
-  | SemiMcfAc
-  | SemiMcfEcmp
-  | SemiMcfEdksp
-  | SemiMcfKsp
-  | SemiMcfKspFT
-  | SemiMcfMcf
-  | SemiMcfMcfEnv
-  | SemiMcfMcfFTEnv
-  | SemiMcfRaeke
-  | SemiMcfRaekeFT
-  | SemiMcfVlb -> Yates_routing.SemiMcf.local_recovery
-  | Spf -> Yates_routing.Spf.local_recovery
-  | Vlb -> Yates_routing.Vlb.local_recovery
-
 let store_paths log_paths scheme topo out_dir algorithm n : unit =
   if log_paths || n = 0 then
     let _ = match (Sys.file_exists out_dir) with
@@ -161,6 +68,17 @@ let count_paths_through_edge (s:scheme) : (int EdgeMap.t) =
         EdgeMap.set ~key:edge ~data:(c+1) acc)))
 
 
-
 let progress_bar x y l =
   "[" ^ (String.make (x*l/y) '#') ^ (String.make (l-1-x*l/y) ' ') ^ "]"
+
+(* Failure handling *)
+
+let validate_files_exist (files: (string * string option) list) : unit =
+  List.iter files ~f:(fun (name, file_opt) ->
+      match file_opt with
+      | Some f -> begin
+          match Sys.file_exists f with
+          | `Yes -> ()
+          | _ -> raise (Not_found_s (sexp_of_string (Printf.sprintf "Input file for %s not found at %s. Please check that the file exists and you have read permissions." name f)))
+          end
+      | None -> ())

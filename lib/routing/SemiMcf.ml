@@ -100,27 +100,12 @@ let solve_lp (pmap:int PathMap.t) (emap:int list EdgeMap.t) (topo:topology)
   let rand = new_rand () in
   let lp_filename = (Printf.sprintf "/tmp/semimcf_%f.lp" rand) in
   let lp_solname = (Printf.sprintf "/tmp/semimcf_%f.sol" rand) in
-  serialize_lp lp lp_filename;
 
-  let gurobi_in = Unix.open_process_in
-                    ("gurobi_cl OptimalityTol=1e-9 ResultFile=" ^ lp_solname ^ " " ^ lp_filename) in
-  let time_str = "Solved in [0-9]+ iterations and \\([0-9.e+-]+\\) seconds" in
-  let time_regex = Str.regexp time_str in
-  let rec read_output gurobi solve_time =
-    try
-      let line = In_channel.input_line_exn gurobi in
-      if Str.string_match time_regex line 0 then
-        let num_seconds = Float.of_string (Str.matched_group 1 line) in
-        read_output gurobi num_seconds
-      else
-        read_output gurobi solve_time
-    with
-      End_of_file -> solve_time in
-  let _ = read_output gurobi_in 0. in
-  ignore (Unix.close_process_in gurobi_in);
+  (* Serialize LP and call Gurobi *)
+  serialize_lp lp lp_filename;
+  call_gurobi lp_filename lp_solname;
 
   (* read back all the edge flows from the .sol file *)
-
   let ratio, flows =
     In_channel.with_file
       lp_solname
@@ -297,78 +282,3 @@ let local_recovery (_:scheme) (topo:topology) (failed_links:failure)
         SrcDstMap.set ~key:(u,v) ~data:uv_dem acc) in
   let new_scheme = restricted_mcf topo new_demands new_base_path_set in
   new_scheme
-
-
-
-  (*
-  (* Begin debug code *)
-  (* Store which paths does a path intersect with *)
-  let (pxmap) =
-    SrcDstMap.fold
-      s (* fold over the scheme *)
-      ~init:(UidMap.empty)
-      (* for every pair of hosts u,v *)
-      ~f:(fun ~key:(u,v) ~data:paths acc ->
-	  if (u = v) then acc
-	  else begin
-	  assert (not (PathMap.is_empty paths));
-	  PathMap.fold
-	    paths
-	    ~init:acc
-	    (* get the possible paths, and for every path *)
-	    ~f:(fun ~key:path ~data:_ (pxmap) ->
-		let id = match (PathMap.find pmap path) with
-                  | None -> failwith "invalid path id"
-                  | Some x -> x in
-		assert (not (List.is_empty path));
-		let pxmap' =
-		  List.fold_left
-		    path
-		    ~init:pxmap
-		    ~f:(fun pxmap e ->
-                        let ids = match (UidMap.find pxmap id) with
-                          | None -> []
-                          | Some x -> x in
-			let xids = match (EdgeMap.find emap e ) with
-			  | None -> ids
-			  | Some newids -> List.sort Pervasives.compare (newids @ ids) in
-			UidMap.set ~key:id ~data:xids pxmap) in
-		(pxmap')) end) in
-
-  let rec remove_dups lst = match lst with
-    | [] -> []
-    | h::t -> let tail = remove_dups (List.filter t (fun x -> x<>h))
-              in h::tail
-    in
-
-  (* Print path intersection *)
-  let _ =
-    UidMap.fold
-      pxmap
-      ~init:0
-      ~f:(fun ~key:id ~data:xids acc ->
-        let xids = remove_dups xids in
-        Printf.printf "\n %d : [%d] : " id (List.length xids);
-        let _ = List.fold_left
-          xids
-          ~init:0
-          ~f:(fun acc xid ->
-            Printf.printf "%d " xid;
-            0
-          ) in
-        0
-      ) in
-   (* End debug code *)
-   *)
-  (* TODO:
-     - LP: variable for every path
-     - minimize: Z (congestion)
-     - constraings: capacity constraints, demand constraints,
-       and variables are non-negative
-     - capacity constraints:
-         Sum_(all paths that contain that edge) flow_var < capacity * Z
-         Sum_(all path for src,dst) flow_var >= demand
-         flow_var >= 0
-     - Re-normalize for the probabilities
-   *)
-
